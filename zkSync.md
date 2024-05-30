@@ -1,7 +1,7 @@
 ## Gas Optimization
-https://code4rena.com/reports/2024-03-zksync#g-01-function-_revertbatches-can-be-optimized
-1. Case 1 : **Reuse variables ! ! !**\
-a. Reduce **reading state** variable frequently ! ! !
+Report link: https://code4rena.com/reports/2024-03-zksync#g-01-function-_revertbatches-can-be-optimized
+### Case 1 : **Reuse variables ! ! !**
+#### a. Reduce **reading state** variables frequently ! ! !
 ```solidity
 if (_newLastBatch < s.totalBatchesVerified) {
 486:             s.totalBatchesVerified = _newLastBatch;
@@ -51,10 +51,11 @@ function _revertBatches(uint256 _newLastBatch) internal {
         emit BlocksRevert(_newLastBatch, s.totalBatchesVerified, cachedtotalBatchesExecuted);
     }
 }
+```
+- make a cache for `s.totalBatchesExecuted` \
+------------------------------------------------
+#### b. Refactor - reuse, extract variables that are used many times(here is an operation)
 ```solidity
-- make a cache to `s.totalBatchesExecuted` \
-b. Refactor - reuse, extract variable that using many times(here is an operation)
-
 452:         require(previousBatchNumber + 1 == _expectedNewNumber, "The provided block number is not correct");
 453: 
 454:         _ensureBatchConsistentWithL2Block(_newTimestamp);
@@ -64,4 +65,53 @@ b. Refactor - reuse, extract variable that using many times(here is an operation
 458:         // Setting new block number and timestamp
 459:         BlockInfo memory newBlockInfo = BlockInfo({number: previousBatchNumber + 1, timestamp: _newTimestamp});
 ```
-Extract `"previousBatchNumber + 1"` to `_expectedNewNumber == previousBatchNumber + 1`, don't do operation too much !
+
+Extract `"previousBatchNumber + 1"` to `_expectedNewNumber == previousBatchNumber + 1`, don't do the operation too much !
+
+#### Inline functions. Function 1 uses function 2, but function 1 has variables that function 2 has defined, which causes duplication and gas waste.
+add and replace function use `DiamondStorage storage ds = getDiamondStorage();` and ` _saveFacetIfNew(_facet);`, but ` _saveFacetIfNew(_facet);` has already defined `ds`, so we can inline the ` _saveFacetIfNew(_facet);` in these two function for gas optimization ! ！！
+```solidity
+ function _addFunctions(address _facet, bytes4[] memory _selectors, bool _isFacetFreezable) private {
+        DiamondStorage storage ds = getDiamondStorage();
+        require(_facet.code.length > 0, "G");
+
+        _saveFacetIfNew(_facet);
+ }
+ function _replaceFunctions(address _facet, bytes4[] memory _selectors, bool _isFacetFreezable) private {
+        DiamondStorage storage ds = getDiamondStorage();
+        require(_facet.code.length > 0, "K");
+......
+    }
+ function _saveFacetIfNew(address _facet) private {
+        DiamondStorage storage ds = getDiamondStorage();
+
+        uint256 selectorsLength = ds.facetToSelectors[_facet].selectors.length;
+        // If there are no selectors associated with facet then save facet as new one
+        if (selectorsLength == 0) {
+            ds.facetToSelectors[_facet].facetPosition = ds.facets.length.toUint16();
+            ds.facets.push(_facet);
+        }
+    }
+
+
+```
+
+--- 
+
+### Case2: Follow **CEI** Principle(Check, Effect, Interaction), do the check and handle revert first to avoid following business logic wasting gas.
+```solidity
+l1Bridge = _l1Bridge;
+61:         l2TokenProxyBytecodeHash = _l2TokenProxyBytecodeHash;
+62: 
+63:         if (block.chainid != ERA_CHAIN_ID) {
+64:             address l2StandardToken = address(new L2StandardERC20{salt: bytes32(0)}());
+65:             l2TokenBeacon = new UpgradeableBeacon{salt: bytes32(0)}(l2StandardToken);
+66:             l2TokenBeacon.transferOwnership(_aliasedOwner);
+67:         } else {
+68:             require(_l1LegecyBridge != address(0), "bf2");
+69:             // l2StandardToken and l2TokenBeacon are already deployed on ERA, and stored in the proxy
+70:         }
+```
+fix:
+- Check first
+- Use "==" instead of "!="
